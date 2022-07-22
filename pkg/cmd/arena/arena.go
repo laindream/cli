@@ -16,11 +16,16 @@
 package arena
 
 import (
+	"os"
+
 	"github.com/diambra/cli/pkg/log"
+	"github.com/go-kit/log/level"
 	"github.com/spf13/cobra"
 )
 
 func NewCommand(logger *log.Logger) *cobra.Command {
+	level.Debug(logger).Log("msg", "hello")
+
 	cmd := &cobra.Command{
 		Use:   "arena",
 		Short: "Arena commands",
@@ -29,5 +34,13 @@ func NewCommand(logger *log.Logger) *cobra.Command {
 	cmd.AddCommand(NewUpCmd(logger))
 	cmd.AddCommand(NewDownCmd(logger))
 	cmd.AddCommand(StatusCmd)
+	romCmds, err := NewRomCmds(logger)
+	if err != nil {
+		level.Error(logger).Log("msg", "failed to create rom commands", "err", err.Error())
+		os.Exit(1)
+	}
+	for _, c := range romCmds {
+		cmd.AddCommand(c)
+	}
 	return cmd
 }
