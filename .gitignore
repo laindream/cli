@@ -2,3 +2,4 @@ scratch/
 cmd/diambra/diambra
 bin/
 dist/
+.idea
