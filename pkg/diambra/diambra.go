@@ -22,7 +22,6 @@ import (
 	"math/big"
 	"net"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -75,7 +74,17 @@ func (e *Diambra) EnvsString() (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("invalid port %s: %w", env.Port, err)
 		}
-		envs[i] = fmt.Sprintf("%s:%d", env.Address.Host, portn)
+		host := env.Address.Host
+		if e.config.UseContainerIP {
+			host = env.ContainerStatus.Address
+			portn = 50051
+		} else {
+			if !net.ParseIP(host).IsLoopback() {
+
+				host = "127.0.0.1"
+			}
+		}
+		envs[i] = fmt.Sprintf("%s:%d", host, portn)
 	}
 	return strings.Join(envs, " "), nil
 }
@@ -130,7 +139,7 @@ func (d *Diambra) start(envId int, first bool) error {
 		return fmt.Errorf("couldn't create env container: %w", err)
 	}
 
-	if first && d.config.PullImage {
+	if first && !d.config.NoPullImage {
 		if err := d.Runner.Pull(ec, d.config.Output); err != nil {
 			return err
 		}
@@ -169,22 +178,7 @@ func (d *Diambra) start(envId int, first bool) error {
 		}
 
 		done := false
-		go func() {
-			if _, err := io.Copy(wc, os.Stdin); err != nil {
-				if done {
-					return
-				}
-				level.Error(d.Logger).Log("msg", "error copying stdin to container stdin", "err", err.Error())
-			}
-		}()
-		go func() {
-			if _, err := io.Copy(os.Stdout, rc); err != nil {
-				if done {
-					return
-				}
-				level.Error(d.Logger).Log("msg", "error copying container stdout to stdout", "err", err.Error())
-			}
-		}()
+		d.copyLogs(&done, wc, os.Stdin, os.Stdout, rc)
 
 		level.Debug(d.Logger).Log("msg", "waiting for grpc")
 		if err := d.waitForGRPC(env.Address); err != nil {
@@ -211,7 +205,27 @@ func (d *Diambra) start(envId int, first bool) error {
 	return nil
 }
 
+func (d *Diambra) copyLogs(done *bool, wc io.WriteCloser, in io.Reader, out io.Writer, rc io.ReadCloser) {
+	go func() {
+		if _, err := io.Copy(wc, os.Stdin); err != nil {
+			if *done {
+				return
+			}
+			level.Error(d.Logger).Log("msg", "error copying stdin to container stdin", "err", err.Error())
+		}
+	}()
+	go func() {
+		if _, err := io.Copy(os.Stdout, rc); err != nil {
+			if *done {
+				return
+			}
+			level.Error(d.Logger).Log("msg", "error copying container stdout to stdout", "err", err.Error())
+		}
+	}()
+}
+
 func (d *Diambra) Start() error {
+	level.Debug(d.Logger).Log("msg", "starting diambra", "config", fmt.Sprintf("%+v", d.config))
 	if err := d.config.Validate(); err != nil {
 		return err
 	}
@@ -237,7 +251,7 @@ func newEnvContainer(config *EnvConfig, envID, randomSeed int) (*container.Conta
 		hostPort = fmt.Sprintf("%d/tcp", listener.Addr().(*net.TCPAddr).Port)
 	}
 
-	pm.AddPortMapping(ContainerPort, hostPort, "127.0.0.1")
+	pm.AddPortMapping(ContainerPort, hostPort, config.Host)
 
 	args := config.AppArgs
 	args.RandomSeed = randomSeed
@@ -255,16 +269,9 @@ func newEnvContainer(config *EnvConfig, envID, randomSeed int) (*container.Conta
 	c.BindMounts = append(c.BindMounts, config.Mounts...)
 
 	if config.AppArgs.Render {
-		xauthority := filepath.Join(config.Home, ".Xauthority")
-		if xap := os.Getenv("XAUTHORITY"); xap != "" {
-			xauthority = xap
+		if err := configureRender(config, c); err != nil {
+			return nil, fmt.Errorf("error configuring render: %w", err)
 		}
-		c.BindMounts = append(c.BindMounts,
-			container.NewBindMount("/tmp/.X11-unix", "/tmp/.X11-unix"),
-			container.NewBindMount(xauthority, "/tmp/.Xauthority"),
-		)
-		c.Hostname = config.Hostname
-		c.Env = append(c.Env, "DISPLAY="+os.Getenv("DISPLAY"))
 	}
 	if config.SeccompProfile != "" {
 		c.SecurityOpt = []string{"seccomp=" + config.SeccompProfile}
@@ -286,46 +293,52 @@ func (e *Diambra) Cleanup() error {
 
 func (e *Diambra) RunAgentImage(image string, args []string) error {
 	level.Debug(e.Logger).Log("msg", "running in container", "image", image, "args", fmt.Sprintf("%v", args))
-	envs, err := e.EnvsStringContainer()
-	if err != nil {
-		return err
-	}
-	c := &container.Container{
+	statusCode, err := e.RunAgentContainer(&container.Container{
 		Name:  "agent",
 		Image: image,
 		Args:  args,
-		Env:   []string{"DIAMBRA_ENVS=" + envs},
-	}
-	cs, err := e.Runner.Start(c)
+	})
 	if err != nil {
 		return err
+	}
+	if statusCode != 0 {
+		return fmt.Errorf("agent exited with status code %d", statusCode)
+	}
+	return nil
+}
+
+func (e *Diambra) RunAgentContainer(c *container.Container) (int, error) {
+	if !e.config.NoPullImage {
+		if err := e.Runner.Pull(c, e.config.Output); err != nil {
+			return 1, err
+		}
+	}
+	envs, err := e.EnvsStringContainer()
+	if err != nil {
+		return 1, err
+	}
+	c.Env = append(c.Env, "DIAMBRA_ENVS="+envs)
+
+	cs, err := e.Runner.Start(c)
+	if err != nil {
+		return 1, err
 	}
 	wc, rc, err := e.Runner.Attach(cs.ID)
 	if err != nil {
-		return err
+		return 1, err
 	}
 
-	go func() {
-		if _, err := io.Copy(wc, os.Stdin); err != nil {
-			level.Error(e.Logger).Log("msg", "error copying stdin to container stdin", "err", err.Error())
-		}
-	}()
-	doneCh := make(chan struct{})
-	go func() {
-		if _, err := io.Copy(os.Stdout, rc); err != nil {
-			level.Error(e.Logger).Log("msg", "error copying container stdout to stdout", "err", err.Error())
-		}
-		doneCh <- struct{}{}
-	}()
+	done := false
+	e.copyLogs(&done, wc, os.Stdin, os.Stdout, rc)
 
 	level.Debug(e.Logger).Log("msg", "waiting for container to exit")
-	err = e.Runner.Wait(cs.ID)
+	statusCode, err := e.Runner.Wait(cs.ID)
 	if err != nil {
-		return fmt.Errorf("couldn't wait for container to finish: %w", err)
+		return 1, fmt.Errorf("couldn't wait for container to finish: %w", err)
 	}
 	wc.Close()
 	level.Debug(e.Logger).Log("msg", "waiting for stdout to close")
-	<-doneCh
+	done = true
 
-	return nil
+	return statusCode, nil
 }

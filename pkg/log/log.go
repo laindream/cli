@@ -28,7 +28,7 @@ type Logger struct {
 }
 
 func New() *Logger {
-	return &Logger{Logger: log.NewLogfmtLogger(os.Stderr)}
+	return &Logger{Logger: log.With(log.NewLogfmtLogger(os.Stderr), "caller", log.Caller(4))}
 }
 
 func (l *Logger) SetOptions(debug bool, logFormat string) error {
@@ -45,7 +45,7 @@ func (l *Logger) SetOptions(debug bool, logFormat string) error {
 	if !debug {
 		l.Logger = level.NewFilter(l.Logger, level.AllowInfo())
 	}
-	l.Logger = log.With(l.Logger, "caller", log.Caller(5))
+	l.Logger = log.With(l.Logger, "caller", log.Caller(4))
 	l.Logger = log.With(l.Logger, "source", "cli")
 
 	return nil

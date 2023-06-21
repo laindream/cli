@@ -27,7 +27,8 @@ func NewCommand(logger *log.Logger) *cobra.Command {
 		Short: "Agent commands",
 		Long:  `These are the agent related commands`,
 	}
-	cmd.AddCommand(InitCmd)
-	cmd.AddCommand(SubmitCmd)
+	cmd.AddCommand(NewInitCmd(logger))
+	cmd.AddCommand(NewSubmitCmd(logger))
+	cmd.AddCommand(NewTestCmd(logger))
 	return cmd
 }

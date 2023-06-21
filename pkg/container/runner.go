@@ -85,6 +85,7 @@ func (pm *PortMapping) AddPortMapping(containerPort string, hostPort string, hos
 type Container struct {
 	Name             string
 	Image            string
+	Command          []string
 	Args             []string
 	Env              []string
 	User             string
@@ -94,6 +95,12 @@ type Container struct {
 	BindMounts       []*BindMount
 	PortMapping      *PortMapping
 	Hostname         string
+	WorkingDir       string
+	IPCMode          string
+
+	// If true, the entrypoint of the image will be overridden. Only used for
+	// `diambra agent test`.
+	OverrideEntrypoint bool
 }
 
 type ContainerStatus struct {
@@ -109,5 +116,5 @@ type Runner interface {
 	Stop(id string) error
 	StopAll() error
 	Attach(id string) (io.WriteCloser, io.ReadCloser, error)
-	Wait(id string) error
+	Wait(id string) (int, error)
 }

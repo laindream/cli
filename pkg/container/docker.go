@@ -60,7 +60,7 @@ func NewDockerRunner(logger log.Logger, client *client.Client, autoRemove bool) 
 func (r *DockerRunner) Pull(c *Container, output *os.File) error {
 	reader, err := r.Client.ImagePull(context.TODO(), c.Image, types.ImagePullOptions{})
 	if err != nil {
-		return fmt.Errorf("couldn't pull image %s: %w:\nTo disable pulling the image on start, retry with --pull=false", c.Image, err)
+		return fmt.Errorf("couldn't pull image %s: %w:\nTo disable pulling the image on start, retry with --images.pull=false", c.Image, err)
 	}
 	defer reader.Close()
 
@@ -74,7 +74,6 @@ func (r *DockerRunner) Start(c *Container) (*ContainerStatus, error) {
 		config = &container.Config{
 			Image:     c.Image,
 			Hostname:  c.Hostname,
-			Cmd:       c.Args,
 			Env:       c.Env,
 			User:      c.User,
 			Tty:       true,
@@ -83,10 +82,14 @@ func (r *DockerRunner) Start(c *Container) (*ContainerStatus, error) {
 				"diambra": "env",
 			},
 			StopSignal: "SIGKILL", // FIXME: Make diambraApp handle SIGTERM insteads
+			WorkingDir: c.WorkingDir,
+			Cmd:        c.Args,
+			Entrypoint: c.Command,
 		}
 		hostConfig = &container.HostConfig{
 			AutoRemove:  r.AutoRemove,
 			SecurityOpt: c.SecurityOpt,
+			IpcMode:     container.IpcMode(c.IPCMode),
 		}
 	)
 	hostConfig.Mounts = make([]mount.Mount, len(c.BindMounts))
@@ -157,9 +160,15 @@ func (r *DockerRunner) LogLogs(id string, logger log.Logger) error {
 	//_, err = stdcopy.StdCopy(os.Stdout, os.Stderr, out)
 }
 
+func ptr[T any](t T) *T {
+	return &t
+}
+
 func (r *DockerRunner) Stop(id string) error {
 	ctx := context.TODO()
-	return r.Client.ContainerStop(ctx, id, &r.TimeoutStop)
+	return r.Client.ContainerStop(ctx, id, container.StopOptions{
+		Timeout: ptr(int(r.TimeoutStop.Seconds())),
+	})
 }
 
 type HijackedResponseReader struct {
@@ -185,7 +194,7 @@ func (r *DockerRunner) Attach(id string) (io.WriteCloser, io.ReadCloser, error) 
 		Stdin:  true,
 		Stdout: true,
 		Stderr: true,
-		Logs:   false, // FIXME?
+		Logs:   true,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -194,17 +203,26 @@ func (r *DockerRunner) Attach(id string) (io.WriteCloser, io.ReadCloser, error) 
 	return resp.Conn, &HijackedResponseReader{log.With(r.Logger, "in", "HijackedResponseReader"), resp}, nil
 }
 
-func (r *DockerRunner) Wait(id string) error {
+func (r *DockerRunner) Wait(id string) (int, error) {
 	ctx := context.TODO()
 	statusCh, errCh := r.Client.ContainerWait(ctx, id, container.WaitConditionNotRunning)
+
+	var (
+		err        error
+		statusCode int
+	)
 	select {
-	case err := <-errCh:
-		if err != nil {
-			return err
+	case e := <-errCh:
+		level.Debug(r.Logger).Log("msg", "got error from errCh", "err", err)
+		if e != nil {
+			err = e
 		}
-	case <-statusCh:
+	case status := <-statusCh:
+		level.Debug(r.Logger).Log("msg", "got status from statusCh", "status", status)
+		statusCode = int(status.StatusCode)
 	}
-	return nil
+	level.Debug(r.Logger).Log("msg", "done waiting", "err", err, "statusCode", statusCode)
+	return statusCode, err
 }
 
 func (r *DockerRunner) StopAll() error {

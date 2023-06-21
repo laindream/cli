@@ -1,0 +1,19 @@
+# DIAMBRA Agent
+
+This is a sample agent consisting of the following files:
+
+- [agent.py](agent.py) - The agent code
+- [requirements.txt](requirements.txt) - The dependencies for the agent
+{{ if .Secret }}
+- [Dockerfile](Dockerfile) - To build the image with all agent dependencies
+- [submission.yaml](submission.yaml) - The manifest including (secret) sources
+{{ else }}
+- [Dockerfile](Dockerfile) - To build the image with agent and all dependencies
+{{ end }}
+
+## Submit agent
+{{ if .Secret }}
+Run `diambra agent submit --submission.manifest submission.yaml --submission.secret <secret_name>=<secret_value>` to submit your agent.
+{{ else }}
+Run `diambra agent submit registy/image:tag` to submit your agent.
+{{ end }}

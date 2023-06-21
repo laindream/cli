@@ -46,7 +46,7 @@ func (r *mockRunner) Attach(id string) (io.WriteCloser, io.ReadCloser, error) {
 	panic("not implemented") // TODO: Implement
 }
 
-func (r *mockRunner) Wait(id string) error {
+func (r *mockRunner) Wait(id string) (int, error) {
 	panic("not implemented") // TODO: Implement
 }
 
@@ -69,7 +69,7 @@ func TestDiambra(t *testing.T) {
 			Scale:          1,
 			AutoRemove:     false,
 			AgentImage:     "",
-			PullImage:      false,
+			NoPullImage:    false,
 			RomsPath:       os.TempDir(),
 			CredPath:       filepath.Join(os.TempDir(), "credfile"),
 			Image:          "",

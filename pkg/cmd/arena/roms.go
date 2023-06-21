@@ -27,19 +27,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func findPython() string {
-	for _, name := range []string{
-		"python",
-		"python3",
-	} {
-		_, err := exec.LookPath(name)
-		if err == nil {
-			return name
-		}
-	}
-	return "python"
-}
-
 func NewScriptCmd(logger *log.Logger, name, script string, c *diambra.EnvConfig) *cobra.Command {
 	var pythonPath string
 	cmd := &cobra.Command{
@@ -62,12 +49,12 @@ func NewScriptCmd(logger *log.Logger, name, script string, c *diambra.EnvConfig)
 		},
 	}
 	c.AddRomsPathFlag(cmd.Flags())
-	cmd.Flags().StringVar(&pythonPath, "python", findPython(), "Path to python executable")
+	cmd.Flags().StringVar(&pythonPath, "python", pyarena.FindPython(), "Path to python executable")
 	return cmd
 }
 
 func NewRomCmds(logger *log.Logger) ([]*cobra.Command, error) {
-	c, err := diambra.NewConfig()
+	c, err := diambra.NewConfig(logger)
 	if err != nil {
 		level.Error(logger).Log("msg", err.Error())
 		os.Exit(1)
@@ -76,5 +63,6 @@ func NewRomCmds(logger *log.Logger) ([]*cobra.Command, error) {
 	return []*cobra.Command{
 		NewScriptCmd(logger, "check roms", pyarena.CheckRoms, c),
 		NewScriptCmd(logger, "list roms", pyarena.ListRoms, c),
+		NewScriptCmd(logger, "version", pyarena.GetDiambraEngineVersion, c),
 	}, nil
 }

@@ -1,0 +1,10 @@
+---
+mode: AIvsCOM
+image: your/image:latest
+command:
+- python
+- "/sources/agent.py"
+- "/sources/model.zip"
+sources:
+  agent.py: https://username:{{`{{.Secrets.token}}`}}@example.com/agent.py
+  model.zip: https://username:{{`{{.Secrets.token}}`}}@example.com/model.zip

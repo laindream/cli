@@ -16,6 +16,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -33,7 +34,7 @@ import (
 )
 
 func NewCmdRun(logger *log.Logger) *cobra.Command {
-	c, err := diambra.NewConfig()
+	c, err := diambra.NewConfig(logger)
 	if err != nil {
 		level.Error(logger).Log("msg", err.Error())
 		os.Exit(1)
@@ -44,17 +45,15 @@ func NewCmdRun(logger *log.Logger) *cobra.Command {
 	}
 
 	cmd := &cobra.Command{
-		Use:   "run",
+		Use:   "run [flags] command [args...]",
 		Short: "Runs a command with DIAMBRA arena started",
 		Long: `Run runs the given command after diambraEngine is brought up.
-		
+
 It will set the DIAMBRA_ENVS environment variable to list the endpoints of all running environments.
 The DIAMBRA arena python package will automatically be configured by this.
 
 The flag --agent-image can be used to run the commands in the given image.`,
-		Args: cobra.MinimumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			level.Debug(logger).Log("config", fmt.Sprintf("%#v", c))
 			if err := RunFn(logger, c, args); err != nil {
 				if exitErr, ok := err.(*exec.ExitError); ok {
 					code := exitErr.ExitCode()
@@ -70,9 +69,7 @@ The flag --agent-image can be used to run the commands in the given image.`,
 	}
 
 	c.AddFlags(cmd.Flags())
-
 	cmd.Flags().SetInterspersed(false)
-
 	return cmd
 }
 
@@ -97,7 +94,10 @@ func RunFn(logger *log.Logger, c *diambra.EnvConfig, args []string) error {
 			level.Error(logger).Log("msg", "Couldn't cleanup DIAMBRA Env", "err", err.Error())
 		}
 	}()
-	signalCh := make(chan os.Signal, 1)
+	var (
+		signalCh = make(chan os.Signal, 1)
+		ex       *exec.Cmd
+	)
 	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		s := <-signalCh
@@ -107,6 +107,11 @@ func RunFn(logger *log.Logger, c *diambra.EnvConfig, args []string) error {
 		}
 		if err := d.Cleanup(); err != nil {
 			level.Error(logger).Log("msg", "cleanup failed", "err", err.Error())
+		}
+		if ex != nil {
+			if err := ex.Process.Kill(); err != nil {
+				level.Error(logger).Log("msg", "Couldn't kill process", "err", err.Error())
+			}
 		}
 		os.Exit(1)
 	}()
@@ -125,8 +130,11 @@ func RunFn(logger *log.Logger, c *diambra.EnvConfig, args []string) error {
 	if c.AgentImage != "" {
 		return d.RunAgentImage(c.AgentImage, args)
 	}
+	if len(args) == 0 {
+		return errors.New("command required when not using --agent-image")
+	}
 
-	ex := exec.Command(args[0], args[1:]...)
+	ex = exec.Command(args[0], args[1:]...)
 	ex.Env = os.Environ()
 	ex.Env = append(ex.Env, fmt.Sprintf("DIAMBRA_ENVS=%s", envs))
 	if c.Interactive {
